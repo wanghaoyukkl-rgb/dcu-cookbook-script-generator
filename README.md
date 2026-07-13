@@ -104,6 +104,24 @@ python3 scripts/match_cookbook_model.py \
 - dtype、量化方式、TP/PP/DP、上下文长度、调度参数和 DCU 环境变量必须保持来源方案不变。
 - 模型、量化、框架、卡型或卡数冲突时停止生成，并报告 blocker。
 
+## 脚本命名
+
+生成的 serve 脚本固定使用以下格式：
+
+```text
+serve_<framework>_<model>_<card>_<card-count>.sh
+```
+
+例如：
+
+```text
+serve_sglang_qwen3-8b_bw1000_1x.sh
+serve_sglang_kimi-k2.5_bw1100_8x.sh
+serve_vllm_qwen3-8b-channel-int8-w8a8_k100ai_1x.sh
+```
+
+文件名统一使用小写；模型名中的空格、斜杠和下划线会转换为 `-`；卡型使用无分隔符的规范名称；卡数统一写为 `<数字>x`。框架版本、端口、卡号和模型绝对路径不会进入文件名。
+
 ## 项目结构
 
 ```text

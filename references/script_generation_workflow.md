@@ -155,6 +155,30 @@ python3 scripts/match_cookbook_model.py \
 
 ## 7. 写入脚本
 
+先按以下固定格式生成文件名：
+
+```text
+serve_<framework>_<model>_<card>_<card-count>.sh
+```
+
+规范化规则：
+
+- `framework` 使用小写 `vllm` 或 `sglang`。
+- `model` 使用请求中的目标模型标识或模型 ID basename，不使用本地模型路径。转为小写，将空格、`/`、`_` 和其它非 `[a-z0-9.-]` 字符替换为 `-`，合并连续 `-` 并去掉首尾 `-`。
+- `card` 先规范为标准卡型，再转为小写并移除 `_`、`-` 和空格。例如 `K100_AI`、`K100-AI` 均写为 `k100ai`。
+- `card-count` 使用 cookbook 匹配条目的卡数并规范为 `<数字>x`；例如表格中的 `8` 和 `8x` 均写为 `8x`。
+- 文件名不包含框架版本、端口、部署方式、`HIP_VISIBLE_DEVICES` 卡号或模型绝对路径。
+
+示例：
+
+```text
+serve_sglang_qwen3-8b_bw1000_1x.sh
+serve_sglang_kimi-k2.5_bw1100_8x.sh
+serve_vllm_qwen3-8b-channel-int8-w8a8_k100ai_1x.sh
+```
+
+如果固定文件名已经存在，先读取其元信息。模型、框架、卡型、卡数或 cookbook 来源不同则停止写入并报告冲突；不得静默覆盖。相同目标需要更新时，也要在汇报中明确说明覆盖原因。
+
 服务启动脚本使用 bash，并设置基础严格模式：
 
 ```bash
@@ -195,6 +219,7 @@ KVCache 判断规则：启动命令包含 `--kv-cache-dtype fp8...` 时，元信
 检查生成脚本：
 
 - 只命名了一个 cookbook 来源。
+- 文件名符合 `serve_<framework>_<model>_<card>_<card-count>.sh`，且各字段与元信息一致。
 - `HIP_VISIBLE_DEVICES` 与请求卡号一致。
 - 模型路径是绝对路径；环境可访问时确认路径存在。
 - 不包含 `rm`、`rm -rf`、`rmdir` 或 `--numa-node`。
