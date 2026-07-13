@@ -38,12 +38,19 @@ description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGL
 
 ## 脚本输出
 
-生成脚本使用框架感知命名，例如：
+所有生成脚本必须使用唯一固定格式：
 
 ```text
-serve_vllm_<model>.sh
-serve_sglang_<model>.sh
+serve_<framework>_<model>_<card>_<card-count>.sh
 ```
+
+- `framework`：固定为小写 `vllm` 或 `sglang`。
+- `model`：使用目标模型标识而不是本地路径；转为小写，将空格、`/`、`_` 和其它非 `[a-z0-9.-]` 字符替换为 `-`，合并连续 `-`。
+- `card`：先规范为 `BW1000`、`BW1100`、`BW1101`、`K100AI` 等标准卡型，再转为小写并移除分隔符。
+- `card-count`：固定为 `<数字>x`，例如 `1x`、`2x`、`4x`、`8x`，不得使用实际卡号列表。
+- 不得把框架版本、端口、部署方式、卡号或模型绝对路径加入文件名。目标文件已存在时先核对元信息；来源或目标不一致时不得静默覆盖。
+
+例如：`serve_sglang_qwen3-8b_bw1000_1x.sh`、`serve_sglang_kimi-k2.5_bw1100_8x.sh`。
 
 每个生成脚本开头必须包含元信息注释：模型、框架、cookbook 文件、cookbook 匹配、卡型、卡号、卡数、TP/PP/DP、部署模式、dtype、量化方式、KVCache、端口、模型路径、realpath（如果已知）和已做适配。
 
