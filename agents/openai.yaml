@@ -1,0 +1,4 @@
+interface:
+  display_name: "DCU Cookbook 脚本生成器"
+  short_description: "基于 HYGON cookbook 生成 DCU 服务脚本。"
+  default_prompt: "使用 $dcu-cookbook-script-generator 基于最新 HYGON cookbook 生成或校验 DCU vLLM/SGLang 服务脚本。"
