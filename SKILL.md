@@ -30,7 +30,7 @@ description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGL
 ## 硬性规则
 
 - Cookbook-first：读取部署方案前必须先更新或检查 HYGON-AI cookbook 缓存。
-- 用户未提供模型路径时，先在 `/public/opendas/DL_DATA/llm-models/` 查找；没有有效匹配再依次查找 `/public2/opendas/DL_DATA/llm-models/`、`/public3/opendas/DL_DATA/llm-models/` 和 `/public4/opendas/DL_DATA/llm-models/`。选定后必须校验路径存在并记录 realpath。
+- 用户未提供模型路径时，先在 `/public/opendas/DL_DATA/llm-models/` 查找；没有有效匹配再依次查找 `/public2/opendas/DL_DATA/llm-models/`、`/public3/opendas/DL_DATA/llm-models/`、`/public4/opendas/DL_DATA/llm-models/`、`/module/`、`/module2/`、`/public4/share/` 和 `/parastor/opendas/DL_DATA/llm-models/`。选定后必须校验路径存在并记录 realpath。
 - 生成脚本只允许做这些适配：设置 `HIP_VISIBLE_DEVICES`、把模型路径替换为目标节点绝对路径、必要时修改/新增服务监听端口、删除 `--numa-node ...`、省略 `rm`、`rm -rf`、`rmdir` 等清理命令。
 - 保留来源方案里的 dtype、TP/PP/DP、量化参数、编译参数、调度参数、上下文长度、显存比例、MoE/通信变量和 DCU 专用环境变量。
 - 如果模型路径缺失，或卡型/卡数/部署/量化与 cookbook 条目冲突，或来源缺少卡数、TP 等关键字段，不生成可执行脚本；标记 blocked，并要求用户提供来源脚本或修正输入。
