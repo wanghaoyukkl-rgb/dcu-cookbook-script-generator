@@ -9,7 +9,7 @@
 - 更新或检查本地 `dcu-inference-cookbook` 缓存。
 - 按模型、框架版本、卡型、卡数、部署方式和量化方式匹配部署方案。
 - 从单一 cookbook 条目生成 vLLM/SGLang serve 脚本。
-- 在 `/public`、`/public2`、`/public3`、`/public4` 的模型目录中依次定位模型权重。
+- 按预设优先级在多个共享模型目录中定位模型权重。
 - 校验已有脚本是否保留 cookbook 的关键参数和 DCU 环境变量。
 
 ## 快速开始
@@ -88,6 +88,10 @@ python3 scripts/match_cookbook_model.py \
 /public2/opendas/DL_DATA/llm-models
 /public3/opendas/DL_DATA/llm-models
 /public4/opendas/DL_DATA/llm-models
+/module
+/module2
+/public4/share
+/parastor/opendas/DL_DATA/llm-models
 ```
 
 只有模型身份、尺寸和量化方式一致时才会选定候选路径。选定后还会检查路径是否存在并记录 `realpath`。

@@ -7,7 +7,7 @@
 生成脚本前先收集或推断以下字段：
 
 - `model`：目标模型名和变体；如果是量化模型，必须包含量化后缀。
-- `model_path`：目标节点可见的绝对路径。按 `/public`、`/public2`、`/public3`、`/public4` 下的模型根目录顺序查找。
+- `model_path`：目标节点可见的绝对路径。按本节定义的模型根目录优先级顺序查找。
 - `framework`：`vllm` 或 `sglang`。
 - `framework_version`：当用户或环境要求特定版本时，用作 cookbook 表格过滤条件。
 - `card`：规范化卡型，例如 `BW1000`、`BW1100`、`BW1101` 或 `K100AI`。
@@ -29,6 +29,10 @@ find /public/opendas/DL_DATA/llm-models -maxdepth 4 \
 /public2/opendas/DL_DATA/llm-models
 /public3/opendas/DL_DATA/llm-models
 /public4/opendas/DL_DATA/llm-models
+/module
+/module2
+/public4/share
+/parastor/opendas/DL_DATA/llm-models
 ```
 
 可以用以下命令按顺序收集候选：
@@ -38,7 +42,11 @@ for root in \
   /public/opendas/DL_DATA/llm-models \
   /public2/opendas/DL_DATA/llm-models \
   /public3/opendas/DL_DATA/llm-models \
-  /public4/opendas/DL_DATA/llm-models; do
+  /public4/opendas/DL_DATA/llm-models \
+  /module \
+  /module2 \
+  /public4/share \
+  /parastor/opendas/DL_DATA/llm-models; do
   test -d "$root" || continue
   find "$root" -maxdepth 4 \
     \( -type d -o -type l \) -iname '*<MODEL_KEYWORD>*' 2>/dev/null
