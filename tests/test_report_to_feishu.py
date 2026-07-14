@@ -27,7 +27,7 @@ class SheetsUpsertTests(unittest.TestCase):
         self.config = {"spreadsheet_token": "sheet-token", "sheet_id": "sheet-id"}
 
     @patch.object(REPORTER, "request_json")
-    def test_creates_record_when_script_path_is_new(self, request_json):
+    def test_creates_record_when_model_and_card_are_new(self, request_json):
         request_json.side_effect = [
             {
                 "data": {
@@ -49,17 +49,16 @@ class SheetsUpsertTests(unittest.TestCase):
         self.assertIn("values_append", request_json.call_args_list[1][0][1])
 
     @patch.object(REPORTER, "request_json")
-    def test_updates_one_record_and_clears_legacy_duplicates(self, request_json):
-        target = "/public/home/user/serve_vllm_qwen3-8b_bw1000_1x.sh"
+    def test_updates_path_and_timestamp_and_clears_legacy_duplicates(self, request_json):
         request_json.side_effect = [
             {
                 "data": {
                     "valueRange": {
                         "values": [
                             REPORTER.HEADERS,
-                            ["Qwen3-8B", target, "BW1000", "old-1", "否"],
+                            ["Qwen3-8B", "/home/a/old-name.sh", "BW1000", "old-1", "否"],
                             ["Other", "/tmp/other.sh", "BW1000", "old", "否"],
-                            ["Qwen3-8B", target, "BW1000", "old-2", "否"],
+                            ["qwen3-8b", "/home/b/other-name.sh", "bw-1000", "old-2", "是"],
                         ]
                     }
                 }
@@ -76,6 +75,16 @@ class SheetsUpsertTests(unittest.TestCase):
         updated_payload = request_json.call_args_list[1][0][2]
         cleared_payload = request_json.call_args_list[2][0][2]
         self.assertEqual(updated_payload["valueRange"]["range"], "sheet-id!A2:E2")
+        self.assertEqual(
+            updated_payload["valueRange"]["values"],
+            [[
+                "Qwen3-8B",
+                summary()["script_path"],
+                "BW1000",
+                summary()["timestamp_iso"],
+                "否",
+            ]],
+        )
         self.assertEqual(cleared_payload["valueRange"]["values"], [["", "", "", "", ""]])
 
 
@@ -88,15 +97,11 @@ class BitableUpsertTests(unittest.TestCase):
                     "items": [
                         {
                             "record_id": "rec-1",
-                            "fields": {
-                                REPORTER.FIELD_SCRIPT: "/public/home/user/serve_vllm_qwen3-8b_bw1000_1x.sh"
-                            },
+                            "fields": {},
                         },
                         {
                             "record_id": "rec-2",
-                            "fields": {
-                                REPORTER.FIELD_SCRIPT: "/public2/home/user/serve_vllm_qwen3-8b_bw1000_1x.sh"
-                            },
+                            "fields": {},
                         },
                     ],
                     "has_more": False,
@@ -111,6 +116,31 @@ class BitableUpsertTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "updated")
         self.assertEqual(result["removed_duplicates"], 1)
+        search_payload = request_json.call_args_list[0][0][2]
+        self.assertEqual(
+            search_payload["filter"]["conditions"],
+            [
+                {
+                    "field_name": REPORTER.FIELD_MODEL,
+                    "operator": "is",
+                    "value": [summary()["model_name"]],
+                },
+                {
+                    "field_name": REPORTER.FIELD_CARD,
+                    "operator": "is",
+                    "value": [summary()["card"]],
+                },
+            ],
+        )
+        self.assertEqual(
+            request_json.call_args_list[1][0][2],
+            {
+                "fields": {
+                    REPORTER.FIELD_SCRIPT: summary()["script_path"],
+                    REPORTER.FIELD_TIMESTAMP: summary()["timestamp_ms"],
+                }
+            },
+        )
         self.assertIn("batch_delete", request_json.call_args_list[2][0][1])
         self.assertEqual(request_json.call_args_list[2][0][2], {"records": ["rec-2"]})
 
