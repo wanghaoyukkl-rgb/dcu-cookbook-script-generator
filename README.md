@@ -2,7 +2,7 @@
 
 这是一个 Codex skill，用于基于 [HYGON-AI/dcu-inference-cookbook](https://github.com/HYGON-AI/dcu-inference-cookbook) 生成或校验 DCU vLLM/SGLang 模型服务启动脚本。
 
-它负责完成 cookbook 更新、部署方案匹配、模型路径定位、服务脚本生成和反向校验。它不会创建容器、启动服务、运行精度/性能测试或调度多模型任务。
+它负责完成 cookbook 更新、部署方案匹配、模型路径定位、服务脚本生成、权限收尾、反向校验和飞书汇报。它不会创建容器、启动服务、运行精度/性能测试或调度多模型任务。
 
 ## 功能
 
@@ -11,6 +11,10 @@
 - 从单一 cookbook 条目生成 vLLM/SGLang serve 脚本。
 - 按预设优先级在多个共享模型目录中定位模型权重。
 - 校验已有脚本是否保留 cookbook 的关键参数和 DCU 环境变量。
+- 支持用户指定脚本输出目录，未指定时使用默认目录。
+- 为生成脚本增加组和其他用户读写权限，为输出目录增加读取和遍历权限。
+- 将生成结果同步到飞书 vLLM/SGLang 工作表并向个人或群聊推送消息。
+- 同一固定脚本文件名再次生成时更新旧记录并清理历史重复项。
 
 ## 快速开始
 
@@ -41,7 +45,9 @@ skill 会依次执行：
 2. 匹配唯一部署条目。
 3. 校验模型路径、卡型、卡数和量化方式。
 4. 只做允许的路径、卡号和端口适配。
-5. 写入脚本并根据来源条目反向校验。
+5. 写入脚本并完成文件、目录权限收尾。
+6. 根据来源条目反向校验。
+7. 更新飞书表格中的当前记录并推送机器人消息。
 
 ### 3. 手工检查 cookbook 缓存
 
@@ -65,7 +71,35 @@ python3 scripts/update_cookbook_cache.py --status
 ~/cookbook/cookbook_state.json
 ```
 
-### 4. 手工匹配部署条目
+### 4. 配置飞书汇报（可选）
+
+凭证必须放在 skill 和 Git 仓库之外：
+
+```bash
+mkdir -p "$HOME/.config/dcu-cookbook-script-generator"
+chmod 700 "$HOME/.config/dcu-cookbook-script-generator"
+```
+
+创建 `$HOME/.config/dcu-cookbook-script-generator/feishu.json`：
+
+```json
+{
+  "app_id": "<app-id>",
+  "app_secret": "<app-secret>",
+  "recipient_id": "<open-id-or-chat-id>",
+  "recipient_id_type": "chat_id",
+  "table_type": "sheets",
+  "table_url": "<feishu-sheet-or-wiki-url>"
+}
+```
+
+```bash
+chmod 600 "$HOME/.config/dcu-cookbook-script-generator/feishu.json"
+```
+
+使用 `chat_id` 时，机器人必须已加入目标群。首次写入新增记录；之后生成相同固定脚本文件名时，将覆盖旧记录并清理重复项。详细规则见 `references/feishu_reporting.md`。
+
+### 5. 手工匹配部署条目
 
 ```bash
 python3 scripts/match_cookbook_model.py \
@@ -122,6 +156,14 @@ serve_vllm_qwen3-8b-channel-int8-w8a8_k100ai_1x.sh
 
 文件名统一使用小写；模型名中的空格、斜杠和下划线会转换为 `-`；卡型使用无分隔符的规范名称；卡数统一写为 `<数字>x`。框架版本、端口、卡号和模型绝对路径不会进入文件名。
 
+用户未指定输出目录时，脚本默认写入：
+
+```text
+~/cookbook/serve-scripts/<framework>-<framework-version>-single-node/
+```
+
+用户可以指定其它绝对路径或 `~` 开头的目录，但不能改变固定文件名。
+
 ## 项目结构
 
 ```text
@@ -130,8 +172,13 @@ serve_vllm_qwen3-8b-channel-int8-w8a8_k100ai_1x.sh
 ├── agents/
 │   └── openai.yaml
 ├── references/
+│   ├── feishu_reporting.md
 │   └── script_generation_workflow.md
-└── scripts/
-    ├── match_cookbook_model.py
-    └── update_cookbook_cache.py
+├── scripts/
+│   ├── finalize_script_permissions.py
+│   ├── match_cookbook_model.py
+│   ├── report_to_feishu.py
+│   └── update_cookbook_cache.py
+└── tests/
+    └── test_report_to_feishu.py
 ```
