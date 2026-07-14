@@ -97,7 +97,7 @@ chmod 700 "$HOME/.config/dcu-cookbook-script-generator"
 chmod 600 "$HOME/.config/dcu-cookbook-script-generator/feishu.json"
 ```
 
-使用 `chat_id` 时，机器人必须已加入目标群。首次写入新增记录；之后在同一框架工作表中同时匹配模型名和加速卡时，只更新脚本绝对路径与时间戳，并清理重复项。详细规则见 `references/feishu_reporting.md`。
+使用 `chat_id` 时，机器人必须已加入目标群。首次写入新增记录；之后在同一框架工作表中同时匹配模型名和加速卡时，按最新脚本更新脚本绝对路径、时间戳与 KVCache-FP8，并清理重复项。详细规则见 `references/feishu_reporting.md`。
 
 ### 5. 手工匹配部署条目
 

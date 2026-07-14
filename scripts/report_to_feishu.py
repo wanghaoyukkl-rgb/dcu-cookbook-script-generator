@@ -323,6 +323,7 @@ def build_bitable_update_payload(summary):
         "fields": {
             FIELD_SCRIPT: summary["script_path"],
             FIELD_TIMESTAMP: summary["timestamp_ms"],
+            FIELD_KVCACHE_FP8: summary["uses_kvcache_fp8"],
         }
     }
 
@@ -457,6 +458,7 @@ def build_sheets_update_payload(summary, sheet_id, row_number, existing_row):
     values.extend([""] * (len(HEADERS) - len(values)))
     values[1] = summary["script_path"]
     values[3] = summary["timestamp_iso"]
+    values[4] = "是" if summary["uses_kvcache_fp8"] else "否"
     return {
         "valueRange": {
             "range": "{}!A{}:E{}".format(sheet_id, row_number, row_number),
