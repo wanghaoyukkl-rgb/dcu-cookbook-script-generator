@@ -14,7 +14,7 @@
 - 支持用户指定脚本输出目录，未指定时使用默认目录。
 - 为生成脚本增加组和其他用户读写权限，为输出目录增加读取和遍历权限。
 - 将生成结果同步到飞书 vLLM/SGLang 工作表并向个人或群聊推送消息。
-- 同一固定脚本文件名再次生成时更新旧记录并清理历史重复项。
+- 同一框架下模型名和加速卡都相同时更新旧记录并清理历史重复项。
 
 ## 快速开始
 
@@ -97,7 +97,7 @@ chmod 700 "$HOME/.config/dcu-cookbook-script-generator"
 chmod 600 "$HOME/.config/dcu-cookbook-script-generator/feishu.json"
 ```
 
-使用 `chat_id` 时，机器人必须已加入目标群。首次写入新增记录；之后生成相同固定脚本文件名时，将覆盖旧记录并清理重复项。详细规则见 `references/feishu_reporting.md`。
+使用 `chat_id` 时，机器人必须已加入目标群。首次写入新增记录；之后在同一框架工作表中同时匹配模型名和加速卡时，只更新脚本绝对路径与时间戳，并清理重复项。详细规则见 `references/feishu_reporting.md`。
 
 ### 5. 手工匹配部署条目
 

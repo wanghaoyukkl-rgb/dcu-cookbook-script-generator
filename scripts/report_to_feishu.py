@@ -309,49 +309,45 @@ def build_sheets_values(summary):
     ]
 
 
-def build_sheets_payload(summary, sheet_id, row_number=None):
-    target_range = "{}!A1:E1".format(sheet_id)
-    if row_number is not None:
-        target_range = "{}!A{}:E{}".format(sheet_id, row_number, row_number)
+def build_sheets_payload(summary, sheet_id):
     return {
         "valueRange": {
-            "range": target_range,
+            "range": "{}!A1:E1".format(sheet_id),
             "values": [build_sheets_values(summary)],
         }
     }
 
 
-def script_identity(script_path):
-    return os.path.basename(str(script_path).strip().rstrip("/"))
+def build_bitable_update_payload(summary):
+    return {
+        "fields": {
+            FIELD_SCRIPT: summary["script_path"],
+            FIELD_TIMESTAMP: summary["timestamp_ms"],
+        }
+    }
 
 
-def bitable_text_value(value):
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "".join(
-            str(item.get("text", "")) if isinstance(item, dict) else str(item)
-            for item in value
-        )
-    return str(value or "")
-
-
-def search_bitable_records(table_config, script_path, access_token):
+def search_bitable_records(table_config, summary, access_token):
     base_url = "{}/bitable/v1/apps/{}/tables/{}/records/search".format(
         API_BASE,
         quote(table_config["app_token"], safe=""),
         quote(table_config["table_id"], safe=""),
     )
     payload = {
-        "field_names": [FIELD_SCRIPT],
+        "field_names": [FIELD_MODEL, FIELD_CARD],
         "filter": {
             "conjunction": "and",
             "conditions": [
                 {
-                    "field_name": FIELD_SCRIPT,
-                    "operator": "contains",
-                    "value": [script_identity(script_path)],
-                }
+                    "field_name": FIELD_MODEL,
+                    "operator": "is",
+                    "value": [summary["model_name"]],
+                },
+                {
+                    "field_name": FIELD_CARD,
+                    "operator": "is",
+                    "value": [summary["card"]],
+                },
             ],
         },
     }
@@ -365,14 +361,7 @@ def search_bitable_records(table_config, script_path, access_token):
             "POST", base_url + "?" + urlencode(query), payload, access_token
         )
         data = result.get("data", {})
-        records.extend(
-            record
-            for record in data.get("items", [])
-            if script_identity(
-                bitable_text_value(record.get("fields", {}).get(FIELD_SCRIPT, ""))
-            )
-            == script_identity(script_path)
-        )
+        records.extend(data.get("items", []))
         if not data.get("has_more"):
             return records
         page_token = data.get("page_token", "")
@@ -386,7 +375,7 @@ def write_bitable(table_config, summary, access_token):
     records_url = "{}/bitable/v1/apps/{}/tables/{}/records".format(
         API_BASE, app_token, table_id
     )
-    existing = search_bitable_records(table_config, summary["script_path"], access_token)
+    existing = search_bitable_records(table_config, summary, access_token)
     if not existing:
         result = request_json(
             "POST", records_url, build_bitable_payload(summary), access_token
@@ -406,7 +395,7 @@ def write_bitable(table_config, summary, access_token):
     result = request_json(
         "PUT",
         records_url + "/" + quote(record_id, safe=""),
-        build_bitable_payload(summary),
+        build_bitable_update_payload(summary),
         access_token,
     )
     updated_record = result.get("data", {}).get("record", {})
@@ -440,16 +429,40 @@ def read_sheet_rows(table_config, access_token):
     return result.get("data", {}).get("valueRange", {}).get("values", []) or []
 
 
-def matching_sheet_rows(rows, script_path):
+def normalize_model_name(value):
+    return str(value or "").strip().casefold()
+
+
+def normalize_card(value):
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().casefold())
+
+
+def matching_sheet_rows(rows, model_name, card):
     matches = []
-    target_identity = script_identity(script_path)
+    target_model = normalize_model_name(model_name)
+    target_card = normalize_card(card)
     for row_number, row in enumerate(rows, start=1):
-        if not isinstance(row, list) or len(row) <= 1:
+        if not isinstance(row, list) or len(row) <= 2:
             continue
-        value = str(row[1]).strip()
-        if value and script_identity(value) == target_identity:
+        if (
+            normalize_model_name(row[0]) == target_model
+            and normalize_card(row[2]) == target_card
+        ):
             matches.append(row_number)
     return matches
+
+
+def build_sheets_update_payload(summary, sheet_id, row_number, existing_row):
+    values = list(existing_row[: len(HEADERS)])
+    values.extend([""] * (len(HEADERS) - len(values)))
+    values[1] = summary["script_path"]
+    values[3] = summary["timestamp_iso"]
+    return {
+        "valueRange": {
+            "range": "{}!A{}:E{}".format(sheet_id, row_number, row_number),
+            "values": [values],
+        }
+    }
 
 
 def write_sheet_range(table_config, payload, access_token):
@@ -460,14 +473,20 @@ def write_sheet_range(table_config, payload, access_token):
 
 
 def write_sheets(table_config, summary, access_token):
+    rows = read_sheet_rows(table_config, access_token)
     matching_rows = matching_sheet_rows(
-        read_sheet_rows(table_config, access_token), summary["script_path"]
+        rows, summary["model_name"], summary["card"]
     )
     if matching_rows:
         target_row = matching_rows[0]
         result = write_sheet_range(
             table_config,
-            build_sheets_payload(summary, table_config["sheet_id"], target_row),
+            build_sheets_update_payload(
+                summary,
+                table_config["sheet_id"],
+                target_row,
+                rows[target_row - 1],
+            ),
             access_token,
         )
         for duplicate_row in matching_rows[1:]:
