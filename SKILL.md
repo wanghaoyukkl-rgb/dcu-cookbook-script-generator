@@ -1,6 +1,6 @@
 ---
 name: dcu-cookbook-script-generator
-description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGLang 模型服务启动脚本。当用户要求更新/拉取 GitHub cookbook、查询 cookbook 部署方案、匹配模型/卡型/框架组合、从 cookbook 条目创建 serve/test 脚本，或检查已有 DCU 服务脚本是否符合 cookbook 最佳实践时使用本 skill。
+description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGLang 模型服务启动脚本，并在生成成功后自动将摘要写入飞书表格、通过机器人推送。当用户要求更新/拉取 GitHub cookbook、查询 cookbook 部署方案、匹配模型/卡型/框架组合、从 cookbook 条目创建 serve/test 脚本、检查已有 DCU 服务脚本，或接入飞书生成记录时使用本 skill。
 ---
 
 # DCU Cookbook 脚本生成器
@@ -15,7 +15,7 @@ description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGL
    - 目标卡型、卡号和卡数
    - 部署模式：默认 `IFB`；只有用户明确要求时使用 `PD`
    - 量化/KVCache 要求、框架版本和指定端口
-   - 生成脚本的输出路径
+   - 可选的生成脚本输出目录；用户未指定时使用默认目录
 2. 在本 skill 根目录更新或查看 cookbook 缓存：
    - 默认检查：`python3 scripts/update_cookbook_cache.py --check`
    - 强制刷新 GitHub：`python3 scripts/update_cookbook_cache.py --force`
@@ -23,7 +23,8 @@ description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGL
 3. 在 `~/cookbook/dcu-inference-cookbook/docs/model-deployment/<framework>/` 下定位 cookbook Markdown。
 4. 匹配目标模型和过滤条件。对于表格型 cookbook 条目，优先使用 `scripts/match_cookbook_model.py`。
 5. 只从一个来源生成服务脚本。不得混用多个 cookbook 条目、本地记录、历史脚本或用户片段。
-6. 用来源条目反向校验生成脚本，并汇报来源、匹配状态和所有允许的适配项。
+6. 写入脚本后执行 `python3 scripts/finalize_script_permissions.py --script-path <absolute-path>`，为脚本及其输出目录增加规定权限，再用来源条目反向校验。
+7. 每个新建或更新的脚本通过校验后，必须立即读取 `references/feishu_reporting.md` 并执行 `scripts/report_to_feishu.py --script-path <absolute-path>`；不得等待用户再次要求。上报器按 `framework` 元信息选择 vLLM/SGLang 工作表，以固定脚本文件名为唯一键新增或更新记录，再推送机器人消息。
 
 提取、匹配和写脚本的详细规则见 `references/script_generation_workflow.md`。
 
@@ -35,6 +36,13 @@ description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGL
 - 保留来源方案里的 dtype、TP/PP/DP、量化参数、编译参数、调度参数、上下文长度、显存比例、MoE/通信变量和 DCU 专用环境变量。
 - 如果模型路径缺失，或卡型/卡数/部署/量化与 cookbook 条目冲突，或来源缺少卡数、TP 等关键字段，不生成可执行脚本；标记 blocked，并要求用户提供来源脚本或修正输入。
 - 低风险模糊匹配仅限基础模型身份一致，且差异只是 `instruct`、`thinking`、`0527`、`2507` 等非量化后缀。量化、框架、卡型、卡数和部署模式不一致都必须阻断。
+- 用户用 `.w8a8` 简写目标模型时，仅当本地 `config.json` 同时证明权重为 8-bit INT channel 策略、激活为 8-bit INT token 策略，才可映射到 cookbook 的 `Channel-INT8-w8a8` 名称；元信息必须记录目标名、cookbook 名和 `quantization_alias: config_verified`。这不是跨量化模糊匹配。
+- 不得把飞书 App Secret、访问令牌、接收者 ID 或表格 token 写入 skill、生成脚本、Git 仓库或日志。允许从环境变量或权限为 `600` 且位于 skill/Git 仓库外的本机配置文件读取；访问令牌不得持久化。
+- 每个新建或更新且通过校验的 serve 脚本都必须自动执行一次飞书上报。仅查看或校验未改动的旧脚本时不得重复追加记录。上报失败时保留脚本，但整个闭环标记为 failed，不得声称任务完成。
+- 飞书表格必须在框架工作表内按固定脚本文件名维护唯一的当前记录：首次上报新增；相同文件名再次生成时覆盖旧记录并清理历史重复项。这样自定义输出目录或 `/public/home`、`/public2/home` 等路径解析变化后仍能替换旧记录。不得仅按模型名删除，因为同一模型可能存在不同框架、卡型或卡数的有效脚本。
+- 飞书配置缺失或 API 调用失败时，保留已生成脚本并将飞书汇报标记为 blocked/failed；只有表格写入和机器人消息都成功才汇报闭环完成。
+- 用户可指定自定义输出目录，但不得用自定义路径改变固定文件名。自定义目录必须是绝对路径或以 `~` 开头；用户未指定时默认使用 `~/cookbook/serve-scripts/<framework>-<framework-version>-single-node/`，未指定框架版本时使用 `~/cookbook/serve-scripts/<framework>-single-node/`。
+- 每个新建或更新的脚本在校验和飞书上报前都必须执行权限收尾：脚本增加 owner 执行权限和 `g/o` 读写权限，输出目录增加 `g/o` 读及遍历权限。权限收尾失败则闭环失败。
 
 ## 脚本输出
 
@@ -61,4 +69,5 @@ serve_<framework>_<model>_<card>_<card-count>.sh
 - 精确匹配或模糊匹配状态
 - 生成脚本路径
 - 已做的允许适配
+- 飞书表格写入和机器人推送状态（启用时）
 - blocker 或假设（如有）

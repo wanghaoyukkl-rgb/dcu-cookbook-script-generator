@@ -15,6 +15,7 @@
 - `deployment`：默认 `IFB`；只有用户明确要求时使用 `PD`。
 - `quantization`：目标量化方式；没有量化后缀时按 BF16/未量化处理。
 - `port`：如果来源方案已指定端口则沿用；否则 vLLM 默认 `8000`，SGLang 默认 `30000`，除非用户指定端口。
+- `output_dir`：用户可选的脚本输出目录。只改变目录，不改变固定文件名。
 
 如果用户未提供 `model_path`，先在默认根目录搜索：
 
@@ -114,6 +115,7 @@ python3 scripts/match_cookbook_model.py \
 
 - `status: exact`，且模型身份和所有硬过滤条件一致。
 - `status: fuzzy`，但仅限基础身份一致，差异只是 `instruct`、`thinking`、`base`、`0527`、`2507` 等低风险非量化后缀。
+- 用户目标以 `.w8a8` 简写、cookbook 使用 `Channel-INT8-w8a8` 全名时，本地 `config.json` 必须同时满足：weights `num_bits=8`、`type=int`、`strategy=channel`，input activations `num_bits=8`、`type=int`、`strategy=token`。满足后按受控量化别名处理并记录 `quantization_alias: config_verified`；任一字段不符即阻断。
 
 必须拒绝或阻断：
 
@@ -154,6 +156,12 @@ python3 scripts/match_cookbook_model.py \
 来源缺少必需字段时标记 blocked。不得根据模型规模或当前空闲卡数推断 TP/卡数。
 
 ## 7. 写入脚本
+
+先确定输出目录：
+
+- 用户明确指定时，展开 `~` 并使用该目录；路径必须是绝对路径，不接受相对路径。
+- 用户未指定时，使用 `~/cookbook/serve-scripts/<framework>-<framework-version>-single-node/`；框架版本未知时使用 `~/cookbook/serve-scripts/<framework>-single-node/`。
+- 创建目录后仍按本节固定规则拼接文件名；不得把用户提供的目录当作自定义文件名。
 
 先按以下固定格式生成文件名：
 
@@ -214,6 +222,15 @@ set -euo pipefail
 
 KVCache 判断规则：启动命令包含 `--kv-cache-dtype fp8...` 时，元信息 `kvcache` 写 `kvcache_fp8`；否则写 `default`。
 
+写入或更新脚本后、内容校验前执行权限收尾：
+
+```bash
+python3 scripts/finalize_script_permissions.py \
+  --script-path '<ABSOLUTE_SERVE_SCRIPT_PATH>'
+```
+
+该工具只增加权限，不移除已有权限：脚本增加 owner 执行权限和 `g/o+rw`；脚本所在输出目录增加 `g/o+rx`。目录的 `x` 是访问其中脚本所必需的遍历权限。不得递归修改输出目录的祖先路径。
+
 ## 8. 汇报前校验
 
 检查生成脚本：
@@ -226,5 +243,7 @@ KVCache 判断规则：启动命令包含 `--kv-cache-dtype fp8...` 时，元信
 - 元信息端口与命令端口一致。
 - vLLM 命令只包含 vLLM 参数；SGLang 命令只包含 SGLang 参数。
 - 来源方案中的测试设置没有被静默改写。
+- 脚本权限包含 owner execute、group read/write、others read/write。
+- 输出目录权限包含 group read/execute、others read/execute。
 
-最终汇报脚本路径，并简要说明来源、缓存 commit/日期、匹配状态、适配项和 blocker。
+每个新建或更新的脚本通过以上检查后，立即读取 `references/feishu_reporting.md` 并执行一次飞书写入与机器人推送，无需等待额外指令；批量生成时逐个校验、逐个上报。仅查看或校验未发生变化的旧脚本不重复写入。最终汇报脚本路径，并简要说明来源、缓存 commit/日期、匹配状态、适配项、飞书写入/推送结果和 blocker。
