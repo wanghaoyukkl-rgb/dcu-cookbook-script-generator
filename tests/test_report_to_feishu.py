@@ -49,7 +49,7 @@ class SheetsUpsertTests(unittest.TestCase):
         self.assertIn("values_append", request_json.call_args_list[1][0][1])
 
     @patch.object(REPORTER, "request_json")
-    def test_updates_path_and_timestamp_and_clears_legacy_duplicates(self, request_json):
+    def test_updates_current_fields_and_clears_legacy_duplicates(self, request_json):
         request_json.side_effect = [
             {
                 "data": {
@@ -82,7 +82,7 @@ class SheetsUpsertTests(unittest.TestCase):
                 summary()["script_path"],
                 "BW1000",
                 summary()["timestamp_iso"],
-                "否",
+                "是",
             ]],
         )
         self.assertEqual(cleared_payload["valueRange"]["values"], [["", "", "", "", ""]])
@@ -138,6 +138,7 @@ class BitableUpsertTests(unittest.TestCase):
                 "fields": {
                     REPORTER.FIELD_SCRIPT: summary()["script_path"],
                     REPORTER.FIELD_TIMESTAMP: summary()["timestamp_ms"],
+                    REPORTER.FIELD_KVCACHE_FP8: summary()["uses_kvcache_fp8"],
                 }
             },
         )
