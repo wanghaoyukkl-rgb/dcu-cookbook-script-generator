@@ -14,10 +14,10 @@
 
 ## 安全规则
 
-- 不得把 App ID、App Secret、访问令牌、接收者 ID 或表格 token 写入 skill、生成脚本、Git 仓库或日志。
-- App Secret 只允许通过 `FEISHU_APP_SECRET` 环境变量或 skill/Git 仓库外、权限为 `600` 的本机配置文件提供。发现凭证出现在聊天、终端历史或其它文件中时，先在飞书开发者后台重置。
+- 公开仓库中的 `assets/feishu.json` 只能保留占位符；不得提交或推送真实 App ID、App Secret、接收者 ID 或表格 URL/token。
+- 用户拉取 skill 后可直接在自己的本地副本中填写 `assets/feishu.json`。发现真实凭证进入 Git 提交、聊天或终端历史时，立即在飞书开发者后台重置。
 - 输出错误时不得打印 App Secret 或 `tenant_access_token`。
-- 公开分发时只允许携带脱敏的 `feishu.example.json`。不得把真实 `feishu.json`、App Secret、接收者 ID 或表格 URL/token 打包进 skill 或提交到 Git。
+- 访问令牌只保存在进程内，不得写入配置文件、生成脚本或日志。
 
 ## 表头
 
@@ -50,7 +50,7 @@ export FEISHU_RECIPIENT_ID_TYPE='open_id'  # 也可使用 email、user_id、unio
 export FEISHU_TABLE_URL='<direct-feishu-table-url>'
 ```
 
-本机长期使用同一表格时，可以把配置放在 `~/.config/dcu-cookbook-script-generator/feishu.json`，避免把资源 token 或凭证提交到 skill 仓库：
+用户拉取 skill 后，通过安全渠道联系维护者取得真实字段，直接填写 skill 内的 `assets/feishu.json`：
 
 ```json
 {
@@ -63,9 +63,9 @@ export FEISHU_TABLE_URL='<direct-feishu-table-url>'
 }
 ```
 
-环境变量优先于本地配置文件。可以通过 `FEISHU_CONFIG_FILE` 指定其它配置文件路径。本机配置文件必须设为仅当前用户可读写（`chmod 600`），且不得加入 Git。包含 App Secret 时脚本会拒绝读取任何允许组用户或其他用户访问的配置文件。
+上报器固定读取 `<skill-root>/assets/feishu.json`，不读取 `~/.config` 或 `FEISHU_CONFIG_FILE` 指定的其它文件。现有字段级环境变量仍可临时覆盖 JSON 中的同名值，但不会改变配置文件路径。模板占位符未替换时，上报器会在调用飞书 API 前返回缺失配置异常。
 
-仓库中的 `feishu.example.json` 仅为脱敏模板。安装后应在仓库外创建真实配置，不得直接在模板中填写凭证并提交。
+`assets/feishu.json` 是 Git 跟踪文件。填写真实值后不得执行包含该文件的 `git add`、提交或推送；对外发布的版本必须始终恢复为占位符。
 
 `/wiki/` 链接会通过知识库节点接口解析真实电子表格 token。应用需申请“查看知识空间节点信息”或“查看知识库”权限，并拥有该节点的阅读权限。
 

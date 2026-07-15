@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -20,6 +23,49 @@ def summary():
         "timestamp_ms": 1784016000000,
         "uses_kvcache_fp8": True,
     }
+
+
+class LocalConfigTests(unittest.TestCase):
+    def test_reads_config_from_bundled_assets_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "feishu.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "app_id": "cli_test",
+                        "app_secret": "test-secret",
+                        "recipient_id": "oc_test",
+                        "recipient_id_type": "chat_id",
+                        "table_type": "sheets",
+                        "table_url": "https://example.test/sheets/test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(REPORTER, "CONFIG_PATH", config_path):
+                config = REPORTER.load_local_config()
+
+            self.assertEqual(config["app_id"], "cli_test")
+            self.assertEqual(config["recipient_id_type"], "chat_id")
+
+    def test_placeholder_is_treated_as_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(REPORTER.FeishuError):
+                REPORTER.env_or_config(
+                    "FEISHU_APP_ID",
+                    {"app_id": "<contact-skill-maintainer>"},
+                    "app_id",
+                )
+
+    def test_missing_bundled_config_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "missing.json"
+            with patch.object(REPORTER, "CONFIG_PATH", config_path):
+                with self.assertRaises(REPORTER.FeishuError) as context:
+                    REPORTER.load_local_config()
+
+            self.assertIn("bundled Feishu config not found", str(context.exception))
 
 
 class SheetsUpsertTests(unittest.TestCase):

@@ -73,14 +73,7 @@ python3 scripts/update_cookbook_cache.py --status
 
 ### 4. 配置飞书汇报（可选）
 
-凭证必须放在 skill 和 Git 仓库之外：
-
-```bash
-mkdir -p "$HOME/.config/dcu-cookbook-script-generator"
-chmod 700 "$HOME/.config/dcu-cookbook-script-generator"
-```
-
-以仓库中的 `feishu.example.json` 为脱敏格式参考，在仓库外创建 `$HOME/.config/dcu-cookbook-script-generator/feishu.json`：
+仓库在 `assets/feishu.json` 中打包了脱敏模板。通过安全渠道联系 skill 维护者获取真实字段，然后直接编辑当前 skill 副本中的这个文件：
 
 ```json
 {
@@ -93,13 +86,11 @@ chmod 700 "$HOME/.config/dcu-cookbook-script-generator"
 }
 ```
 
-```bash
-chmod 600 "$HOME/.config/dcu-cookbook-script-generator/feishu.json"
-```
-
 使用 `chat_id` 时，机器人必须已加入目标群。首次写入新增记录；之后在同一框架工作表中同时匹配模型名和加速卡时，按最新脚本更新脚本绝对路径、时间戳与 KVCache-FP8，并清理重复项。详细规则见 `references/feishu_reporting.md`。
 
-真实 `feishu.json` 不得打包进 skill 或提交到 GitHub。App Secret 是应用密码；公开分发它会使所有下载者获得该应用已授权的飞书能力。
+上报器固定读取 `<skill-root>/assets/feishu.json`，不读取其它配置文件路径。未替换的占位符会触发明确异常。字段级环境变量仍可临时覆盖 JSON 中的值，但不会改变配置文件路径。
+
+`assets/feishu.json` 是 Git 跟踪文件。填写真实值后不得提交或推送该文件；公开版本必须始终只保留占位符。App Secret 是应用密码，泄漏会使其他人获得该应用已授权的飞书能力。
 
 飞书闭环失败时，上报器固定等待 3 秒后重试，最多重试 3 次。初次执行加重试共最多 4 次；仍未同时完成表格写入和机器人消息时，命令返回退出码 `1` 和明确异常。
 
@@ -173,9 +164,10 @@ serve_vllm_qwen3-8b-channel-int8-w8a8_k100ai_1x.sh
 ```text
 .
 ├── SKILL.md
-├── feishu.example.json
 ├── agents/
 │   └── openai.yaml
+├── assets/
+│   └── feishu.json
 ├── references/
 │   ├── feishu_reporting.md
 │   └── script_generation_workflow.md

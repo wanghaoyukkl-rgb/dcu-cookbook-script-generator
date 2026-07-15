@@ -1,0 +1,9 @@
+{
+  "_comment": "Sanitized template. Contact the skill maintainer, fill this local file, and never commit real credentials.",
+  "app_id": "<contact-skill-maintainer>",
+  "app_secret": "<contact-skill-maintainer>",
+  "recipient_id": "<contact-skill-maintainer>",
+  "recipient_id_type": "chat_id",
+  "table_type": "sheets",
+  "table_url": "<contact-skill-maintainer>"
+}
