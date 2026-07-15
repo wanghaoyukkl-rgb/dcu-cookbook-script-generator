@@ -25,6 +25,8 @@ FIELD_TIMESTAMP = "时间戳"
 FIELD_KVCACHE_FP8 = "KVCache-FP8"
 HEADERS = [FIELD_MODEL, FIELD_SCRIPT, FIELD_CARD, FIELD_TIMESTAMP, FIELD_KVCACHE_FP8]
 RECIPIENT_TYPES = {"open_id", "user_id", "union_id", "email", "chat_id"}
+REPORT_MAX_RETRIES = 3
+REPORT_RETRY_DELAY_SECONDS = 3
 
 
 class FeishuError(RuntimeError):
@@ -582,6 +584,61 @@ def dry_run_output(summary, table_type):
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def report_once(
+    summary,
+    table_type,
+    app_id,
+    app_secret,
+    recipient_id,
+    recipient_type,
+):
+    access_token = get_tenant_access_token(app_id, app_secret)
+    resolved_type, table_config = resolve_table_config(
+        table_type, summary["framework"], access_token
+    )
+    table_result = write_table(resolved_type, table_config, summary, access_token)
+    message_result = send_message(recipient_id, recipient_type, summary, access_token)
+    return {
+        "status": "reported",
+        "summary": summary,
+        "table": table_result,
+        "message": message_result,
+    }
+
+
+def report_with_retries(
+    operation,
+    max_retries=REPORT_MAX_RETRIES,
+    delay_seconds=REPORT_RETRY_DELAY_SECONDS,
+    sleep_fn=time.sleep,
+    on_retry=None,
+):
+    total_attempts = max_retries + 1
+    for attempt in range(1, total_attempts + 1):
+        try:
+            result = operation()
+            return result, attempt
+        except (FeishuError, OSError) as exc:
+            if attempt >= total_attempts:
+                raise FeishuError(
+                    "reporting did not close after {} attempts: {}".format(
+                        total_attempts, exc
+                    )
+                )
+            if on_retry:
+                on_retry(attempt, max_retries, delay_seconds, exc)
+            sleep_fn(delay_seconds)
+
+
+def log_retry(attempt, max_retries, delay_seconds, exc):
+    print(
+        "Feishu reporting attempt {} failed: {}; retry {}/{} in {} seconds".format(
+            attempt, exc, attempt, max_retries, delay_seconds
+        ),
+        file=sys.stderr,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Write generated DCU serve-script metadata to Feishu and notify a recipient."
@@ -616,25 +673,20 @@ def main():
             os.environ.get("FEISHU_RECIPIENT_ID_TYPE", "").strip().lower()
             or str(local_config.get("recipient_id_type", "open_id")).strip().lower()
         )
-        access_token = get_tenant_access_token(app_id, app_secret)
-        table_type, table_config = resolve_table_config(
-            args.table_type, summary["framework"], access_token
+        result, attempts = report_with_retries(
+            lambda: report_once(
+                summary,
+                table_type,
+                app_id,
+                app_secret,
+                recipient_id,
+                recipient_type,
+            ),
+            on_retry=log_retry,
         )
-        table_result = write_table(table_type, table_config, summary, access_token)
-        message_result = send_message(recipient_id, recipient_type, summary, access_token)
-        print(
-            json.dumps(
-                {
-                    "status": "reported",
-                    "summary": summary,
-                    "table": table_result,
-                    "message": message_result,
-                },
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        result["attempts"] = attempts
+        result["retries"] = attempts - 1
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     except (FeishuError, OSError, ValueError) as exc:
         print("Feishu reporting failed: {}".format(exc), file=sys.stderr)

@@ -146,5 +146,40 @@ class BitableUpsertTests(unittest.TestCase):
         self.assertEqual(request_json.call_args_list[2][0][2], {"records": ["rec-2"]})
 
 
+class ReportingRetryTests(unittest.TestCase):
+    def test_retries_three_times_then_succeeds(self):
+        calls = []
+        sleeps = []
+
+        def operation():
+            calls.append(True)
+            if len(calls) <= 3:
+                raise REPORTER.FeishuError("temporary failure")
+            return {"status": "reported"}
+
+        result, attempts = REPORTER.report_with_retries(
+            operation, sleep_fn=sleeps.append
+        )
+
+        self.assertEqual(result, {"status": "reported"})
+        self.assertEqual(attempts, 4)
+        self.assertEqual(sleeps, [3, 3, 3])
+
+    def test_raises_after_initial_attempt_and_three_retries(self):
+        calls = []
+        sleeps = []
+
+        def operation():
+            calls.append(True)
+            raise REPORTER.FeishuError("still failing")
+
+        with self.assertRaises(REPORTER.FeishuError) as context:
+            REPORTER.report_with_retries(operation, sleep_fn=sleeps.append)
+
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(sleeps, [3, 3, 3])
+        self.assertIn("did not close after 4 attempts", str(context.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
