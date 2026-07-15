@@ -17,6 +17,7 @@
 - 不得把 App ID、App Secret、访问令牌、接收者 ID 或表格 token 写入 skill、生成脚本、Git 仓库或日志。
 - App Secret 只允许通过 `FEISHU_APP_SECRET` 环境变量或 skill/Git 仓库外、权限为 `600` 的本机配置文件提供。发现凭证出现在聊天、终端历史或其它文件中时，先在飞书开发者后台重置。
 - 输出错误时不得打印 App Secret 或 `tenant_access_token`。
+- 公开分发时只允许携带脱敏的 `feishu.example.json`。不得把真实 `feishu.json`、App Secret、接收者 ID 或表格 URL/token 打包进 skill 或提交到 Git。
 
 ## 表头
 
@@ -63,6 +64,8 @@ export FEISHU_TABLE_URL='<direct-feishu-table-url>'
 ```
 
 环境变量优先于本地配置文件。可以通过 `FEISHU_CONFIG_FILE` 指定其它配置文件路径。本机配置文件必须设为仅当前用户可读写（`chmod 600`），且不得加入 Git。包含 App Secret 时脚本会拒绝读取任何允许组用户或其他用户访问的配置文件。
+
+仓库中的 `feishu.example.json` 仅为脱敏模板。安装后应在仓库外创建真实配置，不得直接在模板中填写凭证并提交。
 
 `/wiki/` 链接会通过知识库节点接口解析真实电子表格 token。应用需申请“查看知识空间节点信息”或“查看知识库”权限，并拥有该节点的阅读权限。
 
@@ -120,7 +123,8 @@ python3 scripts/report_to_feishu.py \
 ```
 
 4. 只有命令返回 `status: reported`，并同时给出 table 与 message 结果，才汇报飞书闭环成功。`table.action` 为 `created` 表示首次新增，为 `updated` 表示已按“模型名 + 加速卡”更新路径、时间戳和 KVCache-FP8。
-5. 表格写入或消息推送失败时，保留已生成脚本，汇报具体阶段和错误；不得声称飞书闭环完成。
+5. 表格写入或消息推送失败时，重新执行完整上报闭环；每次间隔 3 秒，最多重试 3 次。输出中的 `attempts` 是总执行次数，`retries` 是实际重试次数。
+6. 初次执行加 3 次重试后仍未同时完成表格和消息推送时，命令返回退出码 `1` 与 `reporting did not close after 4 attempts` 异常。保留已生成脚本，不得声称飞书闭环完成。
 
 ## 权限要求
 

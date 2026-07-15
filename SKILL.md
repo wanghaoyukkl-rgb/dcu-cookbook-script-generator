@@ -39,6 +39,7 @@ description: 基于 HYGON-AI dcu-inference-cookbook 生成或校验 DCU vLLM/SGL
 - 用户用 `.w8a8` 简写目标模型时，仅当本地 `config.json` 同时证明权重为 8-bit INT channel 策略、激活为 8-bit INT token 策略，才可映射到 cookbook 的 `Channel-INT8-w8a8` 名称；元信息必须记录目标名、cookbook 名和 `quantization_alias: config_verified`。这不是跨量化模糊匹配。
 - 不得把飞书 App Secret、访问令牌、接收者 ID 或表格 token 写入 skill、生成脚本、Git 仓库或日志。允许从环境变量或权限为 `600` 且位于 skill/Git 仓库外的本机配置文件读取；访问令牌不得持久化。
 - 每个新建或更新且通过校验的 serve 脚本都必须自动执行一次飞书上报。仅查看或校验未改动的旧脚本时不得重复追加记录。上报失败时保留脚本，但整个闭环标记为 failed，不得声称任务完成。
+- 飞书上报闭环失败时必须等待 3 秒后重新执行完整闭环，最多重试 3 次（初次执行加重试共最多 4 次）。最终仍未同时完成表格写入和机器人消息时，命令必须返回非零状态和明确异常，不得声称完成。
 - 飞书表格必须在框架工作表内按“模型名 + 加速卡”维护唯一的当前记录：首次上报新增；联合键相同时按最新脚本更新脚本绝对路径、时间戳和 KVCache-FP8，并清理该联合键的历史重复项。不得使用文件名或绝对路径参与匹配，因为不同用户生成同一模型、同一卡型脚本时目录和文件名可能不同；同一模型使用不同加速卡时必须分别保留。
 - 飞书配置缺失或 API 调用失败时，保留已生成脚本并将飞书汇报标记为 blocked/failed；只有表格写入和机器人消息都成功才汇报闭环完成。
 - 用户可指定自定义输出目录，但不得用自定义路径改变固定文件名。自定义目录必须是绝对路径或以 `~` 开头；用户未指定时默认使用 `~/cookbook/serve-scripts/<framework>-<framework-version>-single-node/`，未指定框架版本时使用 `~/cookbook/serve-scripts/<framework>-single-node/`。
