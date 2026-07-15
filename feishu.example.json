@@ -1,8 +1,0 @@
-{
-  "app_id": "<app-id>",
-  "app_secret": "<app-secret>",
-  "recipient_id": "<open-id-or-chat-id>",
-  "recipient_id_type": "chat_id",
-  "table_type": "sheets",
-  "table_url": "<feishu-sheet-or-wiki-url>"
-}

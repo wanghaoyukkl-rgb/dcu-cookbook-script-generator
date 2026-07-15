@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shlex
-import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -17,7 +16,7 @@ from urllib.request import Request, urlopen
 
 
 API_BASE = "https://open.feishu.cn/open-apis"
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "dcu-cookbook-script-generator" / "feishu.json"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "assets" / "feishu.json"
 FIELD_MODEL = "模型名"
 FIELD_SCRIPT = "脚本绝对路径"
 FIELD_CARD = "加速卡"
@@ -40,8 +39,15 @@ def require_env(name):
     return value
 
 
+def is_placeholder(value):
+    value = str(value or "").strip()
+    return value.startswith("<") and value.endswith(">")
+
+
 def env_or_config(env_name, config, config_name):
-    value = os.environ.get(env_name, "").strip() or str(config.get(config_name, "")).strip()
+    env_value = os.environ.get(env_name, "").strip()
+    config_value = str(config.get(config_name, "")).strip()
+    value = env_value or ("" if is_placeholder(config_value) else config_value)
     if not value:
         raise FeishuError(
             "missing required environment variable or local config value: {} / {}".format(
@@ -52,23 +58,14 @@ def env_or_config(env_name, config, config_name):
 
 
 def load_local_config():
-    config_path = Path(
-        os.environ.get("FEISHU_CONFIG_FILE", str(DEFAULT_CONFIG_PATH))
-    ).expanduser()
-    if not config_path.is_file():
-        return {}
+    if not CONFIG_PATH.is_file():
+        raise FeishuError("bundled Feishu config not found: {}".format(CONFIG_PATH))
     try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise FeishuError("invalid local Feishu config: {}".format(exc))
     if not isinstance(config, dict):
         raise FeishuError("local Feishu config must be a JSON object")
-    if str(config.get("app_secret", "")).strip():
-        mode = stat.S_IMODE(config_path.stat().st_mode)
-        if mode & 0o077:
-            raise FeishuError(
-                "local Feishu config contains app_secret and must not be accessible by group/others"
-            )
     return config
 
 
