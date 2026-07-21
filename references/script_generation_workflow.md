@@ -54,7 +54,7 @@ for root in \
 done
 ```
 
-按根目录优先级选择第一个精确有效匹配。如果较早目录只有模糊匹配、相邻尺寸或不同量化变体，继续搜索所有备用根目录；不得因为目录名相似就提前选定。量化模型还要结合 `config.json` 的量化配置确认模型身份。
+按根目录优先级选择第一个精确有效匹配。如果较早目录只有模糊匹配、相邻尺寸或不同量化变体，继续搜索所有备用根目录；不得因为目录名相似就提前选定。默认只校验目录存在并记录 realpath，不读取或校验 `config.json` 中的 `compression_config`、`quantization_config`、`quantization` 等量化声明；只有用户明确要求检查模型量化配置时才读取这些字段。
 
 选定路径后校验并记录软链接真实落点：
 
@@ -115,7 +115,7 @@ python3 scripts/match_cookbook_model.py \
 
 - `status: exact`，且模型身份和所有硬过滤条件一致。
 - `status: fuzzy`，但仅限基础身份一致，差异只是 `instruct`、`thinking`、`base`、`0527`、`2507` 等低风险非量化后缀。
-- 用户目标以 `.w8a8` 简写、cookbook 使用 `Channel-INT8-w8a8` 全名时，本地 `config.json` 必须同时满足：weights `num_bits=8`、`type=int`、`strategy=channel`，input activations `num_bits=8`、`type=int`、`strategy=token`。满足后按受控量化别名处理并记录 `quantization_alias: config_verified`；任一字段不符即阻断。
+- 仅当用户明确要求检查模型量化配置并要求建立受控别名时，才读取本地 `config.json`：例如把 `.w8a8` 简写映射到 `Channel-INT8-w8a8` 时，必须同时证明 weights 为 `num_bits=8`、`type=int`、`strategy=channel`，input activations 为 `num_bits=8`、`type=int`、`strategy=token`，并记录 `quantization_alias: config_verified`。默认不做该映射。
 
 必须拒绝或阻断：
 
@@ -152,6 +152,8 @@ python3 scripts/match_cookbook_model.py \
 - dtype、量化方式、TP/PP/DP、上下文长度、显存比例、调度参数、`-cc` 等编译参数或框架优化开关。
 - DCU、NUMA、通信、量化、MoE 或 PD/IFB 环境变量。
 - 含义不明确的分布式主机/启动地址，例如 `<HOST_IP>`、`master_ip`、`NODE2_IP` 或 `--dist-init-addr`。
+
+判定多节点时解析参数值而不是只检查参数名：`--nnodes 1` 与 `--node-rank 0` 是显式单节点配置，原样保留且不得阻断。`--nnodes` 大于 1、`--node-rank` 非 0、同一参数重复、值不是确定的整数，或存在未解析的外部节点地址时才标记 blocked。单独的本地端口参数不构成多节点证据。
 
 来源缺少必需字段时标记 blocked。不得根据模型规模或当前空闲卡数推断 TP/卡数。
 
@@ -246,4 +248,4 @@ python3 scripts/finalize_script_permissions.py \
 - 脚本权限包含 owner execute、group read/write、others read/write。
 - 输出目录权限包含 group read/execute、others read/execute。
 
-每个新建或更新的脚本通过以上检查后，立即读取 `references/feishu_reporting.md` 并执行一次飞书写入与机器人推送，无需等待额外指令；批量生成时逐个校验、逐个上报。仅查看或校验未发生变化的旧脚本不重复写入。最终汇报脚本路径，并简要说明来源、缓存 commit/日期、匹配状态、适配项、飞书写入/推送结果和 blocker。
+每个新建或更新的脚本通过以上检查后，立即读取 `references/feishu_reporting.md` 并按运行位置分支闭环，无需等待额外指令：集群内直接调用时在当前集群逐个真实上报；本地登录时在同一次 SSH 中逐个输出验证摘要，SSH 成功后由连接器使用本机配置逐个真实上报。仅查看或校验未发生变化的旧脚本不重复写入。最终汇报脚本路径，并简要说明来源、缓存 commit/日期、匹配状态、适配项、飞书写入/推送结果和 blocker。

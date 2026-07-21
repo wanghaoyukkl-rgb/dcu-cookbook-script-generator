@@ -2,6 +2,14 @@
 
 生成并校验 serve 脚本后，使用 `scripts/report_to_feishu.py` 将摘要同步到飞书表格，再由机器人向指定接收者推送相同摘要。
 
+## 运行位置分支
+
+- **集群内直接调用 skill，未使用登录连接器**：在集群上执行 `report_to_feishu.py --script-path <absolute-path>`，读取集群当前 skill 的固定配置并在集群上完成表格写入和机器人推送。
+- **从本地使用 `connect_cluster.py` 登录集群**：远端对每个通过校验的新脚本执行 `report_to_feishu.py --script-path <remote-absolute-path> --emit-remote-summary`，只输出带脚本 SHA-256 和权限证据的非敏感摘要。连接器必须添加 `--local-feishu-report`；SSH 成功后，它先在本机校验所有摘要，再通过 stdin 调用本机同一 skill 的 `report_to_feishu.py --summary-stdin` 完成真实写表和机器人推送。
+- 分支选择以是否使用连接器为准，不猜测 hostname。`--summary-stdin` 和 `DCU_FEISHU_SUMMARY` 是连接器内部协议，不手工复制、编辑或从不可信来源粘贴。
+- 本地登录分支不得把 `assets/feishu.json`、任何 `FEISHU_*` 值或访问令牌上传到集群。连接器会在启动 OpenSSH 与本机上报器时都清除子进程环境中的 `FEISHU_*`，防止 SSH `SendEnv` 转发。远端绝对路径原样写入表格，时间戳由实际调用飞书的一侧生成。
+- 批量生成时，远端可以在同一次 SSH 中为多个脚本各输出一条摘要；连接器会先校验全部摘要，再在本地逐个上报。任一项失败都会令完整闭环失败，但不会再次 SSH 或触发第二次认证。
+
 表格写入采用 upsert 语义，在对应框架工作表内以“模型名 + 加速卡”为联合键：
 
 - 表格中不存在相同模型名和加速卡的记录时新增完整记录。
@@ -35,6 +43,8 @@
 
 ## 环境变量
 
+本节中的 `FEISHU_*` 配置只适用于**集群内直接调用**。本地登录分支会清除这些环境变量，必须把真实字段填入运行连接器的本机 skill 固定 `assets/feishu.json`；不得用环境变量替代，也不得把 JSON 复制到远端。
+
 通用必填项：
 
 ```bash
@@ -63,7 +73,7 @@ export FEISHU_TABLE_URL='<direct-feishu-table-url>'
 }
 ```
 
-上报器固定读取 `<skill-root>/assets/feishu.json`，不读取 `~/.config` 或 `FEISHU_CONFIG_FILE` 指定的其它文件。现有字段级环境变量仍可临时覆盖 JSON 中的同名值，但不会改变配置文件路径。模板占位符未替换时，上报器会在调用飞书 API 前返回缺失配置异常。
+上报器固定读取 `<skill-root>/assets/feishu.json`，不读取 `~/.config` 或 `FEISHU_CONFIG_FILE` 指定的其它文件。集群内直接调用时，现有字段级环境变量仍可临时覆盖 JSON 中的同名值，但不会改变配置文件路径；本地登录连接器的 `--local-feishu-report` 分支会主动移除所有 `FEISHU_*` 覆盖，只允许使用连接器同一份本机 skill 的固定 JSON。模板占位符未替换时，本地分支会在 SSH 前阻断，直接调用则会在调用飞书 API 前返回缺失配置异常。
 
 `assets/feishu.json` 是 Git 跟踪文件。填写真实值后不得执行包含该文件的 `git add`、提交或推送；对外发布的版本必须始终恢复为占位符。
 
@@ -105,6 +115,8 @@ export FEISHU_SHEET_ID_SGLANG='<sglang-sheet-id>'
 
 ## 执行顺序
 
+### 集群内直接调用
+
 1. 先按 cookbook 生成并校验 serve 脚本。
 2. 执行 dry-run，确认派生字段：
 
@@ -125,6 +137,21 @@ python3 scripts/report_to_feishu.py \
 4. 只有命令返回 `status: reported`，并同时给出 table 与 message 结果，才汇报飞书闭环成功。`table.action` 为 `created` 表示首次新增，为 `updated` 表示已按“模型名 + 加速卡”更新路径、时间戳和 KVCache-FP8。
 5. 表格写入或消息推送失败时，重新执行完整上报闭环；每次间隔 3 秒，最多重试 3 次。输出中的 `attempts` 是总执行次数，`retries` 是实际重试次数。
 6. 初次执行加 3 次重试后仍未同时完成表格和消息推送时，命令返回退出码 `1` 与 `reporting did not close after 4 attempts` 异常。保留已生成脚本，不得声称飞书闭环完成。
+
+### 本地登录集群
+
+1. 本机准备一个 Python 3.6 兼容的远端工作流；它负责更新 cookbook、生成和校验脚本，并对每个新脚本执行：
+
+```bash
+python3 scripts/report_to_feishu.py \
+  --script-path '<REMOTE_ABSOLUTE_SERVE_SCRIPT_PATH>' \
+  --emit-remote-summary
+```
+
+2. 本机使用唯一的 stdout/result 文件运行连接器，并明确添加 `--local-feishu-report`。连接器会在认证前检查本机固定配置。
+3. 远端工作流退出码非零时，不解析摘要、不调用飞书；原样保留失败结果。
+4. 远端工作流退出码为零时，连接器要求至少一个、最多 64 个严格格式摘要，先对全部摘要运行本机无网络 dry-run；任何摘要无效时不产生飞书副作用。
+5. 全部摘要有效后逐个执行本机真实上报；一项在 4 次尝试后仍失败时继续尝试其余项，并把成功项写入 `feishu_reports`、失败项写入 `feishu_failures`。只有结果文件 `status=completed`、`exit_code=0`，且 `feishu_reports` 数量与远端摘要数量一致，才汇报完整闭环成功。
 
 ## 权限要求
 

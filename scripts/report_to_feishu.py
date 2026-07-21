@@ -2,14 +2,18 @@
 """Write generated serve-script metadata to Feishu and notify a recipient."""
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
 import shlex
+import stat
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -26,10 +30,33 @@ HEADERS = [FIELD_MODEL, FIELD_SCRIPT, FIELD_CARD, FIELD_TIMESTAMP, FIELD_KVCACHE
 RECIPIENT_TYPES = {"open_id", "user_id", "union_id", "email", "chat_id"}
 REPORT_MAX_RETRIES = 3
 REPORT_RETRY_DELAY_SECONDS = 3
+REMOTE_SUMMARY_PREFIX = "DCU_FEISHU_SUMMARY="
+REMOTE_SUMMARY_SCHEMA = "dcu.feishu.summary/v1"
+REMOTE_SUMMARY_MAX_BYTES = 16 * 1024
+REMOTE_SCRIPT_MAX_BYTES = 1024 * 1024
+REMOTE_SUMMARY_KEYS = {
+    "schema",
+    "status",
+    "model_name",
+    "script_path",
+    "framework",
+    "card",
+    "uses_kvcache_fp8",
+    "script_sha256",
+    "script_mode",
+}
 
 
 class FeishuError(RuntimeError):
     pass
+
+
+def report_timestamp():
+    now = datetime.now(timezone.utc).astimezone()
+    return {
+        "timestamp_iso": now.isoformat(timespec="seconds"),
+        "timestamp_ms": int(time.time() * 1000),
+    }
 
 
 def require_env(name):
@@ -85,6 +112,10 @@ def command_option(content, option):
 
 def parse_metadata(script_path):
     content = script_path.read_text(encoding="utf-8")
+    return parse_metadata_content(script_path, content)
+
+
+def parse_metadata_content(script_path, content):
     metadata = {}
     for line in content.splitlines():
         match = re.match(r"^#\s*([a-z][a-z0-9_]*):\s*(.*?)\s*$", line)
@@ -116,16 +147,206 @@ def parse_metadata(script_path):
     uses_kvcache_fp8 = kvcache_value == "kvcache_fp8" or bool(
         re.search(r"--kv-cache-dtype\s+fp8(?:_|\b)", content, re.IGNORECASE)
     )
-    now = datetime.now(timezone.utc).astimezone()
-    return {
+    summary = {
         "model_name": os.path.basename(model_path),
         "script_path": os.path.abspath(str(script_path)),
         "framework": framework,
         "card": card,
-        "timestamp_iso": now.isoformat(timespec="seconds"),
-        "timestamp_ms": int(time.time() * 1000),
         "uses_kvcache_fp8": uses_kvcache_fp8,
     }
+    summary.update(report_timestamp())
+    return summary
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise FeishuError("remote summary contains a duplicate key")
+        result[key] = value
+    return result
+
+
+def reject_non_json_constant(value):
+    raise FeishuError("remote summary contains a non-JSON numeric constant")
+
+
+def normalize_identity(value):
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").casefold()).strip("-")
+
+
+def parse_remote_summary(raw):
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    if not isinstance(raw, bytes) or not raw or len(raw) > REMOTE_SUMMARY_MAX_BYTES:
+        raise FeishuError("remote summary is empty or too large")
+    if b"\x00" in raw:
+        raise FeishuError("remote summary contains NUL bytes")
+    try:
+        data = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_non_json_constant,
+        )
+    except UnicodeDecodeError:
+        raise FeishuError("remote summary must be valid UTF-8")
+    except ValueError:
+        raise FeishuError("remote summary must be valid JSON")
+    if not isinstance(data, dict) or set(data) != REMOTE_SUMMARY_KEYS:
+        raise FeishuError("remote summary schema keys are invalid")
+    if data.get("schema") != REMOTE_SUMMARY_SCHEMA or data.get("status") != "validated":
+        raise FeishuError("remote summary schema or validation status is invalid")
+
+    model_name = data.get("model_name")
+    if (
+        not isinstance(model_name, str)
+        or not model_name.strip()
+        or model_name != model_name.strip()
+        or len(model_name) > 255
+        or model_name[0] in "=+-@"
+        or re.search(r"[/\\\x00-\x1f\x7f]", model_name)
+    ):
+        raise FeishuError("remote summary model_name is invalid")
+    framework = data.get("framework")
+    if framework not in {"vllm", "sglang"}:
+        raise FeishuError("remote summary framework is invalid")
+    card = data.get("card")
+    if not isinstance(card, str) or not re.fullmatch(r"[A-Z0-9]{2,32}", card):
+        raise FeishuError("remote summary card is invalid")
+    if type(data.get("uses_kvcache_fp8")) is not bool:
+        raise FeishuError("remote summary uses_kvcache_fp8 must be boolean")
+    if not isinstance(data.get("script_sha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", data["script_sha256"]
+    ):
+        raise FeishuError("remote summary script_sha256 is invalid")
+    script_mode = data.get("script_mode")
+    if not isinstance(script_mode, str) or not re.fullmatch(r"0[0-7]{3}", script_mode):
+        raise FeishuError("remote summary script_mode is invalid")
+    if int(script_mode, 8) & 0o766 != 0o766:
+        raise FeishuError("remote summary script_mode lacks required shared-edit bits")
+
+    script_path = data.get("script_path")
+    if (
+        not isinstance(script_path, str)
+        or not script_path.startswith("/")
+        or script_path.startswith("//")
+        or len(script_path) > 4096
+        or re.search(r"[\x00-\x1f\x7f]", script_path)
+    ):
+        raise FeishuError("remote summary script_path is invalid")
+    pure_path = PurePosixPath(script_path)
+    if not pure_path.is_absolute() or ".." in pure_path.parts or str(pure_path) != script_path:
+        raise FeishuError("remote summary script_path is not canonical")
+    filename_match = re.fullmatch(
+        r"serve_(vllm|sglang)_(.+)_([a-z0-9]+)_([0-9]+x)\.sh",
+        pure_path.name,
+        re.IGNORECASE,
+    )
+    if not filename_match or filename_match.group(1).casefold() != framework:
+        raise FeishuError("remote summary script filename does not match framework")
+    if normalize_identity(filename_match.group(2)) != normalize_identity(model_name):
+        raise FeishuError("remote summary script filename does not match model_name")
+    if normalize_card(filename_match.group(3)) != normalize_card(card):
+        raise FeishuError("remote summary script filename does not match card")
+
+    summary = dict(data)
+    summary.update(report_timestamp())
+    return summary
+
+
+def read_remote_summary_stdin(stream=None):
+    if stream is None:
+        if sys.stdin.isatty():
+            raise FeishuError("--summary-stdin requires piped JSON from the cluster connector")
+        stream = getattr(sys.stdin, "buffer", sys.stdin)
+    raw = stream.read(REMOTE_SUMMARY_MAX_BYTES + 1)
+    return parse_remote_summary(raw)
+
+
+def stat_snapshot_signature(value):
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        getattr(value, "st_mtime_ns", int(value.st_mtime * 1000000000)),
+        getattr(value, "st_ctime_ns", int(value.st_ctime * 1000000000)),
+    )
+
+
+def emit_remote_summary(script_path):
+    if not script_path.is_absolute():
+        raise FeishuError("serve script path must be absolute before emitting a remote summary")
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(str(script_path), flags)
+    except OSError as exc:
+        raise FeishuError("serve script must be an accessible regular file: {}".format(exc))
+
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise FeishuError("serve script must be a regular file, not a symlink")
+            content_bytes = handle.read(REMOTE_SCRIPT_MAX_BYTES + 1)
+            after_read = os.fstat(handle.fileno())
+            if len(content_bytes) > REMOTE_SCRIPT_MAX_BYTES:
+                raise FeishuError("serve script is too large for remote summary emission")
+            if stat_snapshot_signature(before) != stat_snapshot_signature(after_read):
+                raise FeishuError("serve script changed while its summary snapshot was read")
+            try:
+                content = content_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                raise FeishuError("serve script must be valid UTF-8")
+
+            syntax = subprocess.run(
+                ["bash", "-n"],
+                input=content_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if syntax.returncode != 0:
+                raise FeishuError("serve script snapshot failed bash -n before summary emission")
+
+            final_descriptor_stat = os.fstat(handle.fileno())
+            try:
+                final_path_stat = os.stat(str(script_path), follow_symlinks=False)
+            except OSError:
+                raise FeishuError("serve script path changed before summary emission")
+            if (
+                stat_snapshot_signature(after_read)
+                != stat_snapshot_signature(final_descriptor_stat)
+                or not stat.S_ISREG(final_path_stat.st_mode)
+                or final_path_stat.st_dev != final_descriptor_stat.st_dev
+                or final_path_stat.st_ino != final_descriptor_stat.st_ino
+            ):
+                raise FeishuError("serve script changed before summary emission")
+            mode = stat.S_IMODE(final_descriptor_stat.st_mode)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    summary = parse_metadata_content(script_path, content)
+    if mode & 0o766 != 0o766:
+        raise FeishuError("serve script lacks required shared-edit permission bits")
+    payload = {
+        "schema": REMOTE_SUMMARY_SCHEMA,
+        "status": "validated",
+        "model_name": summary["model_name"],
+        "script_path": summary["script_path"],
+        "framework": summary["framework"],
+        "card": summary["card"],
+        "uses_kvcache_fp8": summary["uses_kvcache_fp8"],
+        "script_sha256": hashlib.sha256(content_bytes).hexdigest(),
+        "script_mode": "{:04o}".format(mode),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    parse_remote_summary(canonical)
+    encoded = base64.b64encode(canonical).decode("ascii")
+    print(REMOTE_SUMMARY_PREFIX + encoded)
 
 
 def request_json(method, url, payload=None, access_token=None, timeout=30):
@@ -581,6 +802,26 @@ def dry_run_output(summary, table_type):
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def validate_report_evidence(table_result, message_result):
+    if not isinstance(table_result, dict) or table_result.get("type") not in {
+        "sheets",
+        "bitable",
+    }:
+        raise FeishuError("Feishu table result has no supported backend evidence")
+    if table_result.get("action") not in {"created", "updated"}:
+        raise FeishuError("Feishu table result has no upsert action evidence")
+    if table_result.get("type") == "sheets" and not table_result.get("updated_range"):
+        raise FeishuError("Feishu sheets result has no updated range evidence")
+    if table_result.get("type") == "bitable" and not table_result.get("record_id"):
+        raise FeishuError("Feishu bitable result has no record ID evidence")
+    if (
+        not isinstance(message_result, dict)
+        or not isinstance(message_result.get("message_id"), str)
+        or not message_result["message_id"].strip()
+    ):
+        raise FeishuError("Feishu robot result has no message ID evidence")
+
+
 def report_once(
     summary,
     table_type,
@@ -595,6 +836,7 @@ def report_once(
     )
     table_result = write_table(resolved_type, table_config, summary, access_token)
     message_result = send_message(recipient_id, recipient_type, summary, access_token)
+    validate_report_evidence(table_result, message_result)
     return {
         "status": "reported",
         "summary": summary,
@@ -636,22 +878,40 @@ def log_retry(attempt, max_retries, delay_seconds, exc):
     )
 
 
-def main():
+def main(argv=None, input_stream=None):
     parser = argparse.ArgumentParser(
         description="Write generated DCU serve-script metadata to Feishu and notify a recipient."
     )
-    parser.add_argument("--script-path", required=True, help="Generated serve script to report.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--script-path", help="Generated serve script to report.")
+    source.add_argument(
+        "--summary-stdin",
+        action="store_true",
+        help="Read one validated non-secret remote summary JSON object from stdin.",
+    )
+    parser.add_argument(
+        "--emit-remote-summary",
+        action="store_true",
+        help="Validate --script-path and emit a non-secret connector summary without Feishu calls.",
+    )
     parser.add_argument("--table-type", choices=["bitable", "sheets"], help="Override table backend.")
     parser.add_argument("--dry-run", action="store_true", help="Print derived payload without network calls.")
-    args = parser.parse_args()
-
-    script_path = Path(args.script_path).expanduser()
-    if not script_path.is_file():
-        print("serve script not found: {}".format(script_path), file=sys.stderr)
-        return 2
+    args = parser.parse_args(argv)
+    if args.emit_remote_summary and (args.summary_stdin or args.dry_run or args.table_type):
+        parser.error("--emit-remote-summary only supports --script-path")
 
     try:
-        summary = parse_metadata(script_path)
+        if args.script_path:
+            script_path = Path(args.script_path).expanduser()
+            if not script_path.is_file():
+                print("serve script not found: {}".format(script_path), file=sys.stderr)
+                return 2
+            if args.emit_remote_summary:
+                emit_remote_summary(script_path)
+                return 0
+            summary = parse_metadata(script_path)
+        else:
+            summary = read_remote_summary_stdin(input_stream)
         local_config = load_local_config()
         table_type = (
             args.table_type

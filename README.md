@@ -12,9 +12,10 @@
 - 按预设优先级在多个共享模型目录中定位模型权重。
 - 校验已有脚本是否保留 cookbook 的关键参数和 DCU 环境变量。
 - 支持用户指定脚本输出目录，未指定时使用默认目录。
-- 为生成脚本增加组和其他用户读写权限，为输出目录增加读取和遍历权限。
+- 为生成脚本保留共享编辑权限；常规新脚本权限为 `0766`，权限收尾只增加所需权限位，不移除已有权限。
 - 将生成结果同步到飞书 vLLM/SGLang 工作表并向个人或群聊推送消息。
 - 同一框架下模型名和加速卡都相同时更新旧记录并清理历史重复项。
+- 仅在用户明确要求时，从本地直连或通过双因子登录郑州集群后执行原有流程。
 
 ## 快速开始
 
@@ -28,6 +29,21 @@ git clone https://github.com/wanghaoyukkl-rgb/dcu-cookbook-script-generator.git 
 ```
 
 重新打开 Codex 会话后，使用 `$dcu-cookbook-script-generator` 调用该 skill。
+
+### 本地登录集群（可选）
+
+只有明确提出“登录集群”时才会建立连接。默认目标为郑州集群，支持：
+
+- `direct`：用户提供直连 IP，默认所需 VPN 已开启，端口默认 `22`。
+- `2fa`：固定连接 `42.228.13.241:65024`，用户提供用户名；密码和当前验证码仅在本机 OpenSSH 提示中输入。
+
+在 Windows/Codex Desktop 中，由调用方在可见的 `cmd.exe` 窗口运行连接器，不使用 PowerShell 登录窗口。密码和 30 秒验证码只在 OpenSSH 提示出现后手工输入；连接器不会接收、保存或转发这些凭据。
+
+更新 cookbook、生成脚本、权限收尾、反向校验和飞书汇报等多步骤流程，使用一个本机 UTF-8 工作流文件，并通过 `--script-file`、唯一的 `--output-file`/`--result-file` 和 `--local-feishu-report` 在一次 SSH 会话内完成。批量处理多个脚本也不会重复登录。远端只生成脚本并返回不含凭据的摘要；SSH 成功结束后，连接器再使用本机 skill 固定的 `assets/feishu.json` 写入飞书表格并推送机器人，飞书配置不会复制或同步到远端。本机 reporter 的机器 JSON 固定使用 UTF-8，不依赖 Windows 当前代码页。
+
+连接器会区分“SSH 登录或连接失败”和“SSH 登录成功、但远端工作流失败”。关闭认证窗口会中断本次连接；连接器不会自动再开窗口要求第二次认证。
+
+登录说明见 `references/local_cluster_login.md`，连接入口为 `scripts/connect_cluster.py`。
 
 ### 2. 生成服务脚本
 
@@ -125,13 +141,24 @@ python3 scripts/match_cookbook_model.py \
 
 只有模型身份、尺寸和量化方式一致时才会选定候选路径。选定后还会检查路径是否存在并记录 `realpath`。
 
+默认不读取或校验模型 `config.json` 中的 `compression_config`、`quantization_config`、`quantization` 等量化声明；模型名与 cookbook 条目精确一致时直接按 cookbook 生成。只有用户明确要求检查模型量化配置时，才读取这些字段。
+
 ## 生成约束
 
 - 服务脚本必须来自单一 cookbook 条目，不混合多个方案。
 - 仅允许适配 `HIP_VISIBLE_DEVICES`、本地模型绝对路径和服务端口。
 - 可以删除 `--numa-node`，并省略 `rm`、`rm -rf`、`rmdir` 等清理命令。
 - dtype、量化方式、TP/PP/DP、上下文长度、调度参数和 DCU 环境变量必须保持来源方案不变。
+- `--nnodes 1` 和 `--node-rank 0` 是单节点配置，必须原样保留；只有节点数大于 `1`、节点序号非 `0`、值重复或无法解析，或存在未解析的外部节点地址时才按多节点阻断。
 - 模型、量化、框架、卡型或卡数冲突时停止生成，并报告 blocker。
+
+## 验证
+
+在 skill 根目录运行单元测试：
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
 
 ## 脚本命名
 
@@ -170,12 +197,15 @@ serve_vllm_qwen3-8b-channel-int8-w8a8_k100ai_1x.sh
 │   └── feishu.json
 ├── references/
 │   ├── feishu_reporting.md
+│   ├── local_cluster_login.md
 │   └── script_generation_workflow.md
 ├── scripts/
+│   ├── connect_cluster.py
 │   ├── finalize_script_permissions.py
 │   ├── match_cookbook_model.py
 │   ├── report_to_feishu.py
 │   └── update_cookbook_cache.py
 └── tests/
+    ├── test_connect_cluster.py
     └── test_report_to_feishu.py
 ```
